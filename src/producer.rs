@@ -10,13 +10,14 @@ use rdkafka::producer::FutureRecord;
 #[async_trait]
 pub trait Producer: Sync + Send {
     async fn send<'a>(
-        &'a mut self,
+        &'a self,
         topic: String,
         key: String,
         msg: &Vec<u8>,
     ) -> OwnedDeliveryResult;
 }
 
+#[derive(Clone)]
 pub struct KafkaProducer {
     kafka_producer: FutureProducer,
 }
@@ -36,7 +37,7 @@ impl KafkaProducer {
 #[async_trait]
 impl Producer for KafkaProducer {
     async fn send<'a>(
-        &'a mut self,
+        &'a self,
         topic: String,
         key: String,
         msg: &Vec<u8>,
