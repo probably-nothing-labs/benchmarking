@@ -1,0 +1,36 @@
+version: "3.8"
+
+services:
+  # Run a flink cluster in "session mode" where jobs can be submitted
+  jobmanager:
+    image: flink:1.19-java17
+    ports:
+      - "8081:8081"
+    command: jobmanager
+    volumes:
+      - ./flink_jobs/target:/opt/flink/usrlib
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+      - BOOTSTRAP_SERVERS=kafka101:29092,kafka102:29092,kafka103:29092
+    networks:
+      - kafka-platform
+
+  taskmanager:
+    image: flink:1.19-java17
+    depends_on:
+      - jobmanager
+    command: taskmanager
+    scale: 1
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 2
+      - BOOTSTRAP_SERVERS=kafka101:29092,kafka102:29092,kafka103:29092
+    networks:
+      - kafka-platform
+networks:
+  kafka-platform:
+    external: true

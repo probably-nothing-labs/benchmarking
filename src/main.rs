@@ -16,19 +16,19 @@ use crate::producer::{KafkaProducer, Producer};
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    #[arg(long, short='s', default_value_t=String::from("localhost:9092"))]
+    #[arg(long, short='s', default_value_t=String::from("localhost:19092,localhost:29092,localhost:39092"), help="Speifcy kafka bootstrap servers")]
     bootstrap_server: String,
 
-    #[arg(long, short = 'd', default_value_t = 10)]
+    #[arg(long, short = 'd', default_value_t = 10, help="The length (in seconds) the simulation should run for")]
     duration_s: u64,
 
-    #[arg(long, short = 'a', default_value_t = 10_000)]
+    #[arg(long, short = 'a', default_value_t = 10, help="The number of agents to run")]
     num_agents: u64,
 
-    #[arg(long, short = 'g', default_value_t = 1000)]
+    #[arg(long, short = 'g', default_value_t = 10, help="The number of tokio green threads used to run the simulation")]
     num_green_threads: u64,
 
-    #[arg(long, default_value_t = 4)]
+    #[arg(long, default_value_t = 4, help="The rate at which an agent will emit an IMU measurement")]
     imu_tick_rate_s: u64,
 
     #[arg(long, default_value_t=String::from("driver-imu-data"))]
@@ -36,6 +36,9 @@ struct Cli {
 
     #[arg(long, default_value_t=String::from("trips"))]
     trips_topic: String,
+
+    #[arg(long, default_value_t = 10, help="target msg size in bytes. This number of \"junk bytes\" will be added to each message to adjust the message size")]
+    target_msg_size: usize,
 }
 
 #[tokio::main]
@@ -68,10 +71,11 @@ async fn main() {
         let imu_topic = cli.imu_topic.clone();
         let imu_delta = std::time::Duration::from_secs(cli.imu_tick_rate_s);
         let trips_topic = cli.trips_topic.clone();
+        let target_msg_size = cli.target_msg_size.clone();
 
         tasks.spawn(async move {
             let config = SimulationConfig {
-                junk_data_size: 10_000,
+                junk_data_size: target_msg_size,
 
                 imu_topic,
                 imu_delta,
