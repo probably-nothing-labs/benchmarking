@@ -5,6 +5,8 @@ import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.state.MapState;
 import org.apache.flink.api.common.state.MapStateDescriptor;
+import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
+import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.co.KeyedCoProcessFunction;
@@ -21,6 +23,7 @@ import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
 import org.apache.flink.api.java.typeutils.ListTypeInfo;
 
 
+import java.util.Collections;
 import java.util.List;
 import java.util.ArrayList;
 
@@ -57,15 +60,15 @@ public class DataStreamJob {
 
         DataStream<IMURecord> imuStream = env.fromSource(imuSource, WatermarkStrategy.noWatermarks(), "IMU Source")
                 .map(jsonString -> jsonParser.readValue(jsonString, IMURecord.class))
-                .keyBy(IMURecord::driverId);
+                .keyBy(IMURecord::getDriverId);
 
         DataStream<TripRecord> tripStream = env.fromSource(tripSource, WatermarkStrategy.noWatermarks(), "Trip Source")
                 .map(jsonString -> jsonParser.readValue(jsonString, TripRecord.class))
-                .keyBy(TripRecord::driverId);
+                .keyBy(TripRecord::getDriverId);
 
         DataStream<JoinedRecord> joinedStream = imuStream
                 .connect(tripStream)
-                .keyBy(IMURecord::driverId, TripRecord::driverId)
+                .keyBy(IMURecord::getDriverId, TripRecord::getDriverId)
                 .process(new KeyedCoProcessFunction<String, IMURecord, TripRecord, JoinedRecord>() {
                     private transient MapState<String, List<IMURecord>> imuState;
                     private transient MapState<String, Long> tripStartState;
@@ -80,39 +83,50 @@ public class DataStreamJob {
                         imuState = getRuntimeContext().getMapState(desc);
 
                         tripStartState = getRuntimeContext().getMapState(new MapStateDescriptor<>(
-                                "tripStartState", String.class, Long.class));
+                                "tripStartState", BasicTypeInfo.STRING_TYPE_INFO, BasicTypeInfo.LONG_TYPE_INFO));
                     }
 
                     @Override
                     public void processElement1(IMURecord imuValue, Context ctx, Collector<JoinedRecord> out) throws Exception {
-                        if (tripStartState.contains(imuValue.driverId())) {
-                            if (imuState.contains(imuValue.driverId())) {
-                                List<IMURecord> records = imuState.get(imuValue.driverId());
+                        if (tripStartState.contains(imuValue.getDriverId())) {
+                            if (imuState.contains(imuValue.getDriverId())) {
+                                List<IMURecord> records = imuState.get(imuValue.getDriverId());
                                 records.add(imuValue);
-                                imuState.put(imuValue.driverId(), records);
+                                imuState.put(imuValue.getDriverId(), records);
                             } else {
-                                imuState.put(imuValue.driverId(), new ArrayList<>());
+                                imuState.put(imuValue.getDriverId(), new ArrayList<>(Collections.singletonList(imuValue)));
                             }
                         }
                     }
 
                     @Override
                     public void processElement2(TripRecord trip, Context ctx, Collector<JoinedRecord> out) throws Exception {
-                        if ("TRIP_START".equals(trip.eventType())) {
-                            tripStartState.put(trip.driverId(), trip.occurredAtMs());
-                        } else if ("TRIP_END".equals(trip.eventType()) && tripStartState.contains(trip.driverId())) {
-                            List<IMURecord> records = imuState.get(trip.driverId());
-                            if (records != null) {
-                                out.collect(new JoinedRecord(trip.driverId(), trip.tripId(), records));
-                                imuState.remove(trip.driverId());
+                        if ("TRIP_START".equals(trip.getEventType())) {
+                            tripStartState.put(trip.getDriverId(), trip.getOccurredAtMs());
+                        } else if ("TRIP_END".equals(trip.getEventType()) && tripStartState.contains(trip.getDriverId())) {
+                            List<IMURecord> records = imuState.get(trip.getDriverId());
+                            if (records != null && !records.isEmpty()) {
+                                out.collect(new JoinedRecord(trip.getDriverId(), trip.getTripId(), records));
+                                imuState.remove(trip.getDriverId());
                             }
-                            tripStartState.remove(trip.driverId());
+                            tripStartState.remove(trip.getDriverId());
                         }
                     }
                 });
 
-        // TODO: This pipeline fails because flink is not able to properly serialize the JoinedRecord class, how do I fix?
         joinedStream.print();
+
+        KafkaRecordSerializationSchema<JoinedRecord> serializer = KafkaRecordSerializationSchema.builder()
+                .setTopic("results")
+                .setValueSerializationSchema(new JoinedRecordSerializationSchema())
+                .build();
+
+        KafkaSink<JoinedRecord> kafkaSink = KafkaSink.<JoinedRecord>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setRecordSerializer(serializer)
+                .build();
+
+        joinedStream.sinkTo(kafkaSink);
 
         env.execute("Flink Kafka Join Job");
     }

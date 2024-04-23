@@ -2,7 +2,9 @@ version: "3.8"
 
 services:
   # Run a flink cluster in "session mode" where jobs can be submitted
+  #
   jobmanager:
+    # Configures the logic plan of the compute graph and send different parts to the taskmanagers to execute
     image: flink:1.19-java17
     ports:
       - "8081:8081"
@@ -13,11 +15,17 @@ services:
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
+        jobmanager.memory.process.size: 1g
       - BOOTSTRAP_SERVERS=kafka101:29092,kafka102:29092,kafka103:29092
+    deploy:
+      resources:
+        limits:
+          memory: 1g
     networks:
       - kafka-platform
 
   taskmanager:
+    # Does the compute
     image: flink:1.19-java17
     depends_on:
       - jobmanager
@@ -27,8 +35,15 @@ services:
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
-        taskmanager.numberOfTaskSlots: 2
+        taskmanager.numberOfTaskSlots: 1
+        taskmanager.memory.process.size: 16g
       - BOOTSTRAP_SERVERS=kafka101:29092,kafka102:29092,kafka103:29092
+    deploy:
+      resources:
+        limits:
+          memory: 16g
+          cpus: "8"
+
     networks:
       - kafka-platform
 networks:
