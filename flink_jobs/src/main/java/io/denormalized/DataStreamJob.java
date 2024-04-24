@@ -114,7 +114,7 @@ public class DataStreamJob {
                     }
                 });
 
-        joinedStream.print();
+        // joinedStream.print();
 
         KafkaRecordSerializationSchema<JoinedRecord> serializer = KafkaRecordSerializationSchema.builder()
                 .setTopic("results")

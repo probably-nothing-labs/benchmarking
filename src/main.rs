@@ -8,6 +8,10 @@ mod producer;
 use log::info;
 use std::sync::Arc;
 
+use tokio::fs::File;
+use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::sync::Mutex;
+
 use clap::Parser;
 
 use crate::agent::{AgentRunner, AgentRunnerResult, SimulationConfig};
@@ -28,7 +32,7 @@ struct Cli {
     #[arg(long, short = 'g', default_value_t = 10, help="The number of tokio green threads used to run the simulation")]
     num_green_threads: u64,
 
-    #[arg(long, default_value_t = 4, help="The rate at which an agent will emit an IMU measurement")]
+    #[arg(long, default_value_t = 1, help="The rate at which an agent will emit an IMU measurement")]
     imu_tick_rate_s: u64,
 
     #[arg(long, default_value_t=String::from("driver-imu-data"))]
@@ -61,6 +65,10 @@ async fn main() {
 
     let mut tasks = tokio::task::JoinSet::new();
 
+    let file = File::create("output.txt").await.expect("failed to create file");
+    let writer = BufWriter::new(file);
+    let shared_writer = Arc::new(Mutex::new(writer));
+
     log::info!(
         "Starting {} worker threads with {} agents each",
         num_green_threads,
@@ -68,6 +76,7 @@ async fn main() {
     );
     for _ in 0..num_green_threads {
         let producer = Arc::clone(&producer);
+        let out_file = Arc::clone(&shared_writer);
         let imu_topic = cli.imu_topic.clone();
         let imu_delta = std::time::Duration::from_secs(cli.imu_tick_rate_s);
         let trips_topic = cli.trips_topic.clone();
@@ -81,13 +90,13 @@ async fn main() {
                 imu_delta,
 
                 trips_topic,
-                first_trip_delay_s: 60,
-                trip_delay_min_s: 60,
-                trip_delay_max_s: 180,
-                trip_min_length_s: 30,
-                trip_max_length_s: 180,
+                first_trip_delay_s: 10,
+                trip_delay_min_s: 10,
+                trip_delay_max_s: 60,
+                trip_min_length_s: 5,
+                trip_max_length_s: 60,
             };
-            let runner = AgentRunner::new(agents_per_runner, producer, config);
+            let runner = AgentRunner::new(agents_per_runner, producer, config, out_file);
             runner
                 .run(std::time::Duration::new(cli.duration_s.into(), 0))
                 .await
@@ -99,6 +108,9 @@ async fn main() {
         let run_res = res.unwrap();
         results += run_res;
     }
+
+    let _ = shared_writer.lock().await.flush().await;
+    
 
     info!("Done!");
     info!("{:?}", results);

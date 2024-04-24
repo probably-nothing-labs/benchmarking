@@ -4,9 +4,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::fs::File;
+use tokio::io::{AsyncWriteExt, BufWriter};
 
 use crate::imu_types::IMUMeasurement;
 use crate::producer::Producer;
+
+type WritableFile = Arc<Mutex<BufWriter<File>>>;
 
 fn get_timestamp_ms() -> u64 {
     let now = SystemTime::now();
@@ -20,13 +25,16 @@ enum MessageType {
     IMU,
 }
 
+#[derive(Clone, Debug)]
 struct IMUState {
     measurements_count: u64,
     next_action_time: Instant,
 }
 
+#[derive(Clone, Debug)]
 struct Trip {
     id: Uuid,
+    imu_count: u64,
     start_time: Instant,
     end_time: Instant,
 }
@@ -49,6 +57,7 @@ pub struct SimulationConfig {
 struct Agent {
     id: Uuid,
     config: SimulationConfig,
+    log_file: WritableFile,
     imu_state: IMUState,
     trip_start_at: Instant,
     current_trip: Option<Trip>,
@@ -56,7 +65,7 @@ struct Agent {
 }
 
 impl Agent {
-    fn new(config: SimulationConfig) -> Self {
+    fn new(config: SimulationConfig, log_file: WritableFile) -> Self {
         let mut rng = rand::thread_rng();
         let now = Instant::now();
 
@@ -68,6 +77,7 @@ impl Agent {
 
         Self {
             id: Uuid::new_v4(),
+            log_file,
             config,
             imu_state: IMUState {
                 measurements_count: 0,
@@ -84,7 +94,7 @@ impl Agent {
         String::from_iter(std::iter::repeat('M').take(self.config.junk_data_size))
     }
 
-    fn get_imu_message(&self) -> Vec<u8> {
+    fn get_imu_message(&mut self) -> Vec<u8> {
         let json_payload = serde_json::json!({
             "driver_id": self.id,
             "occurred_at_ms": get_timestamp_ms(),
@@ -93,6 +103,10 @@ impl Agent {
         });
 
         let payload = serde_json::to_vec(&json_payload).expect("Failed to serialize");
+
+        if let Some(trip) = self.current_trip.as_mut() {
+            trip.imu_count += 1;
+        }
 
         payload
     }
@@ -108,6 +122,7 @@ impl Agent {
         let trip_id = Uuid::new_v4();
         let trip = Trip {
             id: trip_id,
+            imu_count: 0,
             start_time: now,
             end_time: end,
         };
@@ -127,9 +142,9 @@ impl Agent {
         payload
     }
 
-    fn end_trip(&mut self) -> Vec<u8> {
+    async fn end_trip(&mut self) -> Vec<u8> {
         let trip = self.current_trip.as_ref().unwrap();
-        // log::info!("driver {} ending trip {}", self.id, trip.id);
+        log::debug!("driver {} ending trip {} imu count {}", self.id, trip.id, trip.imu_count);
 
         let json_payload = serde_json::json!({
             "trip_id": trip.id,
@@ -140,6 +155,9 @@ impl Agent {
         });
 
         let payload = serde_json::to_vec(&json_payload).expect("Failed to serialize");
+
+        let entry = format!("{},{},{}\n", self.id, trip.id, trip.imu_count);
+        self.write_log_entry(entry.as_bytes()).await;
 
         // Calculate when the next Trip for this agent should start
         let mut rng = rand::thread_rng();
@@ -157,7 +175,12 @@ impl Agent {
         payload
     }
 
-    fn next(&mut self) -> Option<(MessageType, Vec<u8>)> {
+    async fn write_log_entry(&self, line: &[u8]) {
+        let mut file = self.log_file.lock().await;
+        let _ = (*file).write(line).await;
+    }
+
+    async fn next(&mut self) -> Option<(MessageType, Vec<u8>)> {
         let now = Instant::now();
         if self.imu_state.next_action_time <= now {
             self.imu_state.next_action_time = now + self.config.imu_delta;
@@ -168,7 +191,7 @@ impl Agent {
             if let Some(trip) = &self.current_trip {
                 if trip.end_time <= now {
                     // Return trip end event
-                    return Some((MessageType::Trip, self.end_trip()));
+                    return Some((MessageType::Trip, self.end_trip().await));
                 } else {
                     // On a trip, but it isn't over
                     // Noop
@@ -210,18 +233,25 @@ pub struct AgentRunner {
     agents: Vec<Agent>,
     config: SimulationConfig,
     producer: Arc<dyn Producer>,
+    log_file: WritableFile,
 }
 
 impl AgentRunner {
-    pub fn new(num_agents: u64, producer: Arc<dyn Producer>, config: SimulationConfig) -> Self {
+    pub fn new(
+        num_agents: u64,
+        producer: Arc<dyn Producer>,
+        config: SimulationConfig,
+        log_file: WritableFile,
+    ) -> Self {
         let agents = (0..num_agents)
-            .map(|_| Agent::new(config.clone()))
+            .map(|_| Agent::new(config.clone(), Arc::clone(&log_file)))
             .collect();
 
         Self {
             agents,
             config,
             producer,
+            log_file,
         }
     }
 
@@ -232,7 +262,7 @@ impl AgentRunner {
             .iter_mut()
             .map(|agent| async {
                 if let Some(_) = agent.current_trip {
-                    let msg = agent.end_trip();
+                    let msg = agent.end_trip().await;
                     let key = agent.id.to_string();
 
                     self.producer
@@ -261,7 +291,7 @@ impl AgentRunner {
                 .agents
                 .iter_mut()
                 .map(|agent| async {
-                    if let Some((msg_type, msg)) = agent.next() {
+                    if let Some((msg_type, msg)) = agent.next().await {
                         let topic = match msg_type {
                             MessageType::IMU => self.config.imu_topic.clone(),
                             MessageType::Trip => self.config.trips_topic.clone(),
