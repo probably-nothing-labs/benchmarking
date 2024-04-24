@@ -4,10 +4,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::sync::Mutex;
 
+use crate::events;
 use crate::imu_types::IMUMeasurement;
 use crate::producer::Producer;
 
@@ -18,11 +19,6 @@ fn get_timestamp_ms() -> u64 {
     let since_the_epoch = now.duration_since(UNIX_EPOCH).expect("Time went backwards");
 
     since_the_epoch.as_millis() as u64
-}
-
-enum MessageType {
-    Trip,
-    IMU,
 }
 
 #[derive(Clone, Debug)]
@@ -89,29 +85,30 @@ impl Agent {
         }
     }
 
-    fn get_junk_data(&self) -> String {
+    fn get_meta(&self) -> events::Meta {
         // populate the message with junk data to control the average message size
-        String::from_iter(std::iter::repeat('M').take(self.config.junk_data_size))
+        let data = String::from_iter(std::iter::repeat('M').take(self.config.junk_data_size));
+
+        let mut meta = serde_json::Map::new();
+        meta.insert("nonsense".to_string(), serde_json::Value::from(data));
+
+        meta
     }
 
-    fn get_imu_message(&mut self) -> Vec<u8> {
-        let json_payload = serde_json::json!({
-            "driver_id": self.id,
-            "occurred_at_ms": get_timestamp_ms(),
-            "meta": {"nonsense": [self.get_junk_data()]},
-            "imu": IMUMeasurement::new(),
-        });
-
-        let payload = serde_json::to_vec(&json_payload).expect("Failed to serialize");
-
+    fn get_imu_message(&mut self) -> events::Event {
         if let Some(trip) = self.current_trip.as_mut() {
             trip.imu_count += 1;
         }
 
-        payload
+        events::Event::IMUMeasurement {
+            driver_id: self.id,
+            occurred_at_ms: get_timestamp_ms(),
+            imu_measurement: IMUMeasurement::new(),
+            meta: self.get_meta(),
+        }
     }
 
-    fn start_trip(&mut self) -> Vec<u8> {
+    fn start_trip(&mut self) -> events::Event {
         let mut rng = rand::thread_rng();
 
         let now = Instant::now();
@@ -127,34 +124,30 @@ impl Agent {
             end_time: end,
         };
         self.current_trip = Some(trip);
-        // log::info!("driver {} starting trip {}", self.id, trip_id);
 
-        let json_payload = serde_json::json!({
-            "trip_id": trip_id,
-            "driver_id": self.id,
-            "occurred_at_ms": get_timestamp_ms(),
-            "meta": {"nonsense": [self.get_junk_data()]},
-            "event_type": "TRIP_START",
-        });
-
-        let payload = serde_json::to_vec(&json_payload).expect("Failed to serialize");
-
-        payload
+        events::Event::Trip(events::Trip::Start {
+            trip_id,
+            driver_id: self.id,
+            occurred_at_ms: get_timestamp_ms(),
+            meta: self.get_meta(),
+        })
     }
 
-    async fn end_trip(&mut self) -> Vec<u8> {
+    async fn end_trip(&mut self) -> events::Event {
         let trip = self.current_trip.as_ref().unwrap();
-        log::debug!("driver {} ending trip {} imu count {}", self.id, trip.id, trip.imu_count);
+        log::debug!(
+            "driver {} ending trip {} imu count {}",
+            self.id,
+            trip.id,
+            trip.imu_count
+        );
 
-        let json_payload = serde_json::json!({
-            "trip_id": trip.id,
-            "driver_id": self.id,
-            "occurred_at_ms": get_timestamp_ms(),
-            "meta": {"nonsense": [self.get_junk_data()]},
-            "event_type": "TRIP_END",
+        let payload = events::Event::Trip(events::Trip::End {
+            trip_id: trip.id,
+            driver_id: self.id,
+            occurred_at_ms: get_timestamp_ms(),
+            meta: self.get_meta(),
         });
-
-        let payload = serde_json::to_vec(&json_payload).expect("Failed to serialize");
 
         let entry = format!("{},{},{}\n", self.id, trip.id, trip.imu_count);
         self.write_log_entry(entry.as_bytes()).await;
@@ -180,24 +173,24 @@ impl Agent {
         let _ = (*file).write(line).await;
     }
 
-    async fn next(&mut self) -> Option<(MessageType, Vec<u8>)> {
+    async fn next(&mut self) -> Option<events::Event> {
         let now = Instant::now();
         if self.imu_state.next_action_time <= now {
             self.imu_state.next_action_time = now + self.config.imu_delta;
             self.imu_state.measurements_count += 1;
 
-            return Some((MessageType::IMU, self.get_imu_message()));
+            return Some(self.get_imu_message());
         } else {
             if let Some(trip) = &self.current_trip {
                 if trip.end_time <= now {
                     // Return trip end event
-                    return Some((MessageType::Trip, self.end_trip().await));
+                    return Some(self.end_trip().await);
                 } else {
                     // On a trip, but it isn't over
                     // Noop
                 }
             } else if self.trip_start_at >= now {
-                return Some((MessageType::Trip, self.start_trip()));
+                return Some(self.start_trip());
             }
 
             None
@@ -262,8 +255,9 @@ impl AgentRunner {
             .iter_mut()
             .map(|agent| async {
                 if let Some(_) = agent.current_trip {
-                    let msg = agent.end_trip().await;
                     let key = agent.id.to_string();
+                    let e = agent.end_trip().await;
+                    let msg = serde_json::to_vec(&e).expect("Failed to serialize");
 
                     self.producer
                         .send(self.config.trips_topic.clone(), key, &msg)
@@ -291,13 +285,14 @@ impl AgentRunner {
                 .agents
                 .iter_mut()
                 .map(|agent| async {
-                    if let Some((msg_type, msg)) = agent.next().await {
-                        let topic = match msg_type {
-                            MessageType::IMU => self.config.imu_topic.clone(),
-                            MessageType::Trip => self.config.trips_topic.clone(),
+                    if let Some(e) = agent.next().await {
+                        let topic = match e {
+                            events::Event::IMUMeasurement { .. } => self.config.imu_topic.clone(),
+                            events::Event::Trip(_) => self.config.trips_topic.clone(),
                         };
 
                         let key = agent.id.to_string();
+                        let msg = serde_json::to_vec(&e).expect("Failed to serialize");
 
                         self.producer
                             .send(topic, key, &msg)

@@ -4,6 +4,7 @@
 mod agent;
 mod imu_types;
 mod producer;
+mod events;
 
 use log::info;
 use std::sync::Arc;
