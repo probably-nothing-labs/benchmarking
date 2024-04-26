@@ -7,7 +7,7 @@ public class TripRecord {
     @JsonProperty("driver_id")
     private String driverId;
 
-    @JsonProperty("event_type")
+    @JsonProperty("event_name")
     private String eventType;
 
     @JsonProperty("meta")
@@ -27,7 +27,7 @@ public class TripRecord {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Meta {
         @JsonProperty("nonsense")
-        private String[] nonsense;
+        private String nonsense;
 
         // Default constructor
         public Meta() {
@@ -35,8 +35,8 @@ public class TripRecord {
         }
 
         // Getters and Setters
-        public String[] getNonsense() { return nonsense; }
-        public void setNonsense(String[] nonsense) { this.nonsense = nonsense; }
+        public String getNonsense() { return nonsense; }
+        public void setNonsense(String nonsense) { this.nonsense = nonsense; }
     }
 
     // Getters and Setters

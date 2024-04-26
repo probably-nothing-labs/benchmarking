@@ -11,6 +11,9 @@ public class JoinedRecord {
     @JsonProperty("trip_id")
     private String tripId;
 
+    @JsonProperty("measurement_count")
+    private int measurementCount;
+
     @JsonProperty("measurements")
     private List<IMURecord> measurements;
 
@@ -22,6 +25,7 @@ public class JoinedRecord {
     public JoinedRecord(String driverId, String tripId, List<IMURecord> measurements) {
         this.driverId = driverId;
         this.tripId = tripId;
+        this.measurementCount = measurements.size();
         this.measurements = measurements;
     }
 
@@ -30,6 +34,8 @@ public class JoinedRecord {
     public void setDriverId(String driverId) { this.driverId = driverId; }
     public String getTripId() { return tripId; }
     public void setTripId(String tripId) { this.tripId = tripId; }
+    public int getMeasurementCount() { return measurementCount; }
+    public void setMeasurementCount(int measurementCount) { this.measurementCount = measurementCount; }
     public List<IMURecord> getMeasurements() { return measurements; }
     public void setMeasurements(List<IMURecord> measurements) { this.measurements = measurements; }
     public String toString() {

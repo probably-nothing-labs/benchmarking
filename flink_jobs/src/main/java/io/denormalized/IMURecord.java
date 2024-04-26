@@ -7,7 +7,7 @@ public class IMURecord {
     @JsonProperty("driver_id")
     private String driverId;
 
-    @JsonProperty("imu")
+    @JsonProperty("imu_measurement")
     private ImuData imu;
 
     @JsonProperty("meta")
@@ -98,15 +98,15 @@ public class IMURecord {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class MetaData {
         @JsonProperty("nonsense")
-        private String[] nonsense;
+        private String nonsense;
 
         // Default constructor
         public MetaData() {
             // Explicit default constructor
         }
 
-        public String[] getNonsense() { return nonsense; }
-        public void setNonsense(String[] nonsense) { this.nonsense = nonsense; }
+        public String getNonsense() { return nonsense; }
+        public void setNonsense(String nonsense) { this.nonsense = nonsense; }
     }
 
     // Getters and Setters

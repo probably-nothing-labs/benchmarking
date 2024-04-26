@@ -2,8 +2,8 @@ extern crate benchmarking;
 use benchmarking::events::{Event, Trip};
 use benchmarking::imu_types::IMUMeasurement as Measurement;
 
-use uuid::Uuid;
 use serde_json::{Map, Value};
+use uuid::Uuid;
 
 fn main() {
     let mut meta = Map::new();
@@ -13,7 +13,7 @@ fn main() {
         trip_id: Uuid::new_v4(),
         driver_id: Uuid::new_v4(),
         occurred_at_ms: 10,
-        meta,
+        meta: meta.clone(),
     };
 
     println!("{}", serde_json::to_string_pretty(&t).unwrap());
@@ -30,8 +30,17 @@ fn main() {
         Event::Trip(t) => {
             println!("{}", serde_json::to_string_pretty(&t).unwrap());
         }
-        Event::IMUMeasurement{..} => {
+        Event::IMUMeasurement { .. } => {
             println!("{}", serde_json::to_string_pretty(&event).unwrap());
-        } 
+        }
     }
+
+    let payload = Event::Trip(Trip::End {
+        trip_id: Uuid::new_v4(),
+        driver_id: Uuid::new_v4(),
+        occurred_at_ms: 129,
+        meta: meta.clone(),
+    });
+
+    println!("{}", serde_json::to_string_pretty(&payload).unwrap());
 }

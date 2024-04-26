@@ -3,4 +3,5 @@
 .DS_Store
 .metals
 .idea/
-output.txt
+*.txt
+*.log

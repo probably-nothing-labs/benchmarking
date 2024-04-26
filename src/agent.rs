@@ -4,15 +4,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 use std::sync::Arc;
-use tokio::fs::File;
-use tokio::io::{AsyncWriteExt, BufWriter};
-use tokio::sync::Mutex;
 
 use crate::events;
 use crate::imu_types::IMUMeasurement;
 use crate::producer::Producer;
-
-type WritableFile = Arc<Mutex<BufWriter<File>>>;
 
 fn get_timestamp_ms() -> u64 {
     let now = SystemTime::now();
@@ -31,7 +26,6 @@ struct IMUState {
 struct Trip {
     id: Uuid,
     imu_count: u64,
-    start_time: Instant,
     end_time: Instant,
 }
 
@@ -53,7 +47,6 @@ pub struct SimulationConfig {
 struct Agent {
     id: Uuid,
     config: SimulationConfig,
-    log_file: WritableFile,
     imu_state: IMUState,
     trip_start_at: Instant,
     current_trip: Option<Trip>,
@@ -61,7 +54,7 @@ struct Agent {
 }
 
 impl Agent {
-    fn new(config: SimulationConfig, log_file: WritableFile) -> Self {
+    fn new(config: SimulationConfig) -> Self {
         let mut rng = rand::thread_rng();
         let now = Instant::now();
 
@@ -73,7 +66,6 @@ impl Agent {
 
         Self {
             id: Uuid::new_v4(),
-            log_file,
             config,
             imu_state: IMUState {
                 measurements_count: 0,
@@ -120,7 +112,6 @@ impl Agent {
         let trip = Trip {
             id: trip_id,
             imu_count: 0,
-            start_time: now,
             end_time: end,
         };
         self.current_trip = Some(trip);
@@ -135,7 +126,7 @@ impl Agent {
 
     async fn end_trip(&mut self) -> events::Event {
         let trip = self.current_trip.as_ref().unwrap();
-        log::debug!(
+        tracing::debug!(
             "driver {} ending trip {} imu count {}",
             self.id,
             trip.id,
@@ -143,14 +134,19 @@ impl Agent {
         );
 
         let payload = events::Event::Trip(events::Trip::End {
-            trip_id: trip.id,
-            driver_id: self.id,
+            trip_id: trip.id.clone(),
+            driver_id: self.id.clone(),
             occurred_at_ms: get_timestamp_ms(),
             meta: self.get_meta(),
         });
 
-        let entry = format!("{},{},{}\n", self.id, trip.id, trip.imu_count);
-        self.write_log_entry(entry.as_bytes()).await;
+        tracing::info!(
+            target: crate::logging::LOG_TARGET,
+            driver_id = ?self.id,
+            trip_id = ?trip.id,
+            imu_count = trip.imu_count,
+            "trip end",
+        );
 
         // Calculate when the next Trip for this agent should start
         let mut rng = rand::thread_rng();
@@ -166,11 +162,6 @@ impl Agent {
         self.trip_count += 1;
 
         payload
-    }
-
-    async fn write_log_entry(&self, line: &[u8]) {
-        let mut file = self.log_file.lock().await;
-        let _ = (*file).write(line).await;
     }
 
     async fn next(&mut self) -> Option<events::Event> {
@@ -226,7 +217,6 @@ pub struct AgentRunner {
     agents: Vec<Agent>,
     config: SimulationConfig,
     producer: Arc<dyn Producer>,
-    log_file: WritableFile,
 }
 
 impl AgentRunner {
@@ -234,22 +224,19 @@ impl AgentRunner {
         num_agents: u64,
         producer: Arc<dyn Producer>,
         config: SimulationConfig,
-        log_file: WritableFile,
     ) -> Self {
         let agents = (0..num_agents)
-            .map(|_| Agent::new(config.clone(), Arc::clone(&log_file)))
+            .map(|_| Agent::new(config.clone()))
             .collect();
 
         Self {
             agents,
             config,
             producer,
-            log_file,
         }
     }
 
     async fn end_all_trips(&mut self) {
-        log::debug!("Ending all trips");
         let futures = self
             .agents
             .iter_mut()
@@ -273,8 +260,8 @@ impl AgentRunner {
     }
 
     pub async fn run(mut self, duration: Duration) -> AgentRunnerResult {
-        log::debug!("Starting Agent Traffic, {} agents", self.agents.len());
-        log::debug!("{:?}", self.config);
+        // tracing::info!(num_agents = self.agents.len(), "Starting Agent Traffic");
+        // tracing::info!(config=?self.config, "Starting Agent Traffic");
 
         let mut current = Instant::now();
         let end = Instant::now() + duration;

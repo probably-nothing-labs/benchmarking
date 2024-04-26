@@ -8,14 +8,14 @@ pub type Meta = Map<String, Value>;
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "event_name")]
 pub enum Trip {
-    #[serde(rename = "START_TRIP")]
+    #[serde(rename = "TRIP_START")]
     Start {
         trip_id: Uuid,
         driver_id: Uuid,
         occurred_at_ms: u64,
         meta: Meta,
     },
-    #[serde(rename = "END_TRIP")]
+    #[serde(rename = "TRIP_END")]
     End {
         trip_id: Uuid,
         driver_id: Uuid,
@@ -35,5 +35,3 @@ pub enum Event {
         meta: Meta,
     },
 }
-
-// let payload = serde_json::to_vec(&json_payload).expect("Failed to serialize");

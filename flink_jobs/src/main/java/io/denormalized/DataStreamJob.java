@@ -27,8 +27,11 @@ import java.util.Collections;
 import java.util.List;
 import java.util.ArrayList;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class DataStreamJob {
+    private static final Logger LOG = LoggerFactory.getLogger(DataStreamJob.class);
 
     public static void main(String[] args) throws Exception {
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
@@ -113,8 +116,6 @@ public class DataStreamJob {
                         }
                     }
                 });
-
-        // joinedStream.print();
 
         KafkaRecordSerializationSchema<JoinedRecord> serializer = KafkaRecordSerializationSchema.builder()
                 .setTopic("results")
