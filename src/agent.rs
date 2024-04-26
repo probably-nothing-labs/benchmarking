@@ -1,13 +1,10 @@
 use rand::Rng;
-use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-use std::sync::Arc;
-
 use crate::events;
 use crate::imu_types::IMUMeasurement;
-use crate::producer::Producer;
+use crate::agent_runner::SimulationConfig;
 
 fn get_timestamp_ms() -> u64 {
     let now = SystemTime::now();
@@ -17,44 +14,29 @@ fn get_timestamp_ms() -> u64 {
 }
 
 #[derive(Clone, Debug)]
-struct IMUState {
-    measurements_count: u64,
-    next_action_time: Instant,
+pub struct IMUState {
+    pub measurements_count: u64,
+    pub next_action_time: Instant,
 }
 
 #[derive(Clone, Debug)]
-struct Trip {
-    id: Uuid,
-    imu_count: u64,
-    end_time: Instant,
+pub struct Trip {
+    pub id: Uuid,
+    pub imu_count: u64,
+    pub end_time: Instant,
 }
 
-#[derive(Clone, Debug)]
-pub struct SimulationConfig {
-    pub junk_data_size: usize,
-
-    pub imu_topic: String,
-    pub imu_delta: Duration,
-
-    pub trips_topic: String,
-    pub first_trip_delay_s: u64, // max time till first trip is taken
-    pub trip_delay_min_s: u64,
-    pub trip_delay_max_s: u64,
-    pub trip_min_length_s: u64,
-    pub trip_max_length_s: u64,
-}
-
-struct Agent {
-    id: Uuid,
-    config: SimulationConfig,
-    imu_state: IMUState,
-    trip_start_at: Instant,
-    current_trip: Option<Trip>,
-    trip_count: u64,
+pub struct Agent {
+    pub id: Uuid,
+    pub config: SimulationConfig,
+    pub imu_state: IMUState,
+    pub trip_start_at: Instant,
+    pub current_trip: Option<Trip>,
+    pub trip_count: u64,
 }
 
 impl Agent {
-    fn new(config: SimulationConfig) -> Self {
+    pub fn new(config: SimulationConfig) -> Self {
         let mut rng = rand::thread_rng();
         let now = Instant::now();
 
@@ -124,7 +106,7 @@ impl Agent {
         })
     }
 
-    async fn end_trip(&mut self) -> events::Event {
+    pub async fn end_trip(&mut self) -> events::Event {
         let trip = self.current_trip.as_ref().unwrap();
         tracing::debug!(
             "driver {} ending trip {} imu count {}",
@@ -164,7 +146,7 @@ impl Agent {
         payload
     }
 
-    async fn next(&mut self) -> Option<events::Event> {
+    pub async fn next(&mut self) -> Option<events::Event> {
         let now = Instant::now();
         if self.imu_state.next_action_time <= now {
             self.imu_state.next_action_time = now + self.config.imu_delta;
@@ -185,132 +167,6 @@ impl Agent {
             }
 
             None
-        }
-    }
-}
-
-#[derive(Default, Serialize, Deserialize, Debug)]
-pub struct AgentRunnerResult {
-    pub imu_measurements_count: u64,
-    pub total_trips: u64,
-}
-
-impl std::ops::Add for AgentRunnerResult {
-    type Output = AgentRunnerResult;
-
-    fn add(self, other: AgentRunnerResult) -> AgentRunnerResult {
-        AgentRunnerResult {
-            imu_measurements_count: self.imu_measurements_count + other.imu_measurements_count,
-            total_trips: self.total_trips + other.total_trips,
-        }
-    }
-}
-
-impl std::ops::AddAssign for AgentRunnerResult {
-    fn add_assign(&mut self, other: AgentRunnerResult) {
-        self.imu_measurements_count += other.imu_measurements_count;
-        self.total_trips += other.total_trips;
-    }
-}
-
-pub struct AgentRunner {
-    agents: Vec<Agent>,
-    config: SimulationConfig,
-    producer: Arc<dyn Producer>,
-}
-
-impl AgentRunner {
-    pub fn new(
-        num_agents: u64,
-        producer: Arc<dyn Producer>,
-        config: SimulationConfig,
-    ) -> Self {
-        let agents = (0..num_agents)
-            .map(|_| Agent::new(config.clone()))
-            .collect();
-
-        Self {
-            agents,
-            config,
-            producer,
-        }
-    }
-
-    async fn end_all_trips(&mut self) {
-        let futures = self
-            .agents
-            .iter_mut()
-            .map(|agent| async {
-                if let Some(_) = agent.current_trip {
-                    let key = agent.id.to_string();
-                    let e = agent.end_trip().await;
-                    let msg = serde_json::to_vec(&e).expect("Failed to serialize");
-
-                    self.producer
-                        .send(self.config.trips_topic.clone(), key, &msg)
-                        .await
-                        .expect("Message not sent");
-                }
-            })
-            .collect::<Vec<_>>();
-
-        for future in futures {
-            future.await;
-        }
-    }
-
-    pub async fn run(mut self, duration: Duration) -> AgentRunnerResult {
-        // tracing::info!(num_agents = self.agents.len(), "Starting Agent Traffic");
-        // tracing::info!(config=?self.config, "Starting Agent Traffic");
-
-        let mut current = Instant::now();
-        let end = Instant::now() + duration;
-
-        // Main loop, keep iterating until duration has passed
-        while current <= end {
-            let futures = self
-                .agents
-                .iter_mut()
-                .map(|agent| async {
-                    if let Some(e) = agent.next().await {
-                        let topic = match e {
-                            events::Event::IMUMeasurement { .. } => self.config.imu_topic.clone(),
-                            events::Event::Trip(_) => self.config.trips_topic.clone(),
-                        };
-
-                        let key = agent.id.to_string();
-                        let msg = serde_json::to_vec(&e).expect("Failed to serialize");
-
-                        self.producer
-                            .send(topic, key, &msg)
-                            .await
-                            .expect("Message not sent");
-                    } else {
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            for future in futures {
-                future.await;
-            }
-
-            tokio::time::sleep(Duration::from_millis(1)).await;
-            current = Instant::now();
-        }
-
-        self.end_all_trips().await;
-
-        let imu_measurements_count = self
-            .agents
-            .iter()
-            .map(|agent| agent.imu_state.measurements_count)
-            .sum();
-
-        let total_trips = self.agents.iter().map(|agent| agent.trip_count).sum();
-
-        AgentRunnerResult {
-            imu_measurements_count,
-            total_trips,
         }
     }
 }

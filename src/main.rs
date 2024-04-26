@@ -2,6 +2,7 @@
 #![allow(unused_variables)]
 
 mod agent;
+mod agent_runner;
 mod events;
 mod imu_types;
 mod logging;
@@ -10,7 +11,7 @@ mod producer;
 use clap::Parser;
 use std::sync::Arc;
 
-use crate::agent::{AgentRunner, AgentRunnerResult, SimulationConfig};
+use crate::agent_runner::{AgentRunner, AgentRunnerResult, SimulationConfig};
 use crate::producer::{KafkaProducer, Producer};
 
 #[derive(Parser)]
