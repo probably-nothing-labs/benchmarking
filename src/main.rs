@@ -101,11 +101,11 @@ async fn main() {
         imu_delta,
 
         trips_topic,
-        first_trip_delay_s: 10,
-        trip_delay_min_s: 10,
-        trip_delay_max_s: 60,
-        trip_min_length_s: 5,
-        trip_max_length_s: 60,
+        first_trip_delay_s: 1,
+        trip_delay_min_s: 1,
+        trip_delay_max_s: 2,
+        trip_min_length_s: 1,
+        trip_max_length_s: 2,
     };
 
     tracing::info!(target: crate::logging::LOG_ALL, "");
