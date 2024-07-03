@@ -3,5 +3,4 @@
 .DS_Store
 .metals
 .idea/
-*.txt
 *.log
