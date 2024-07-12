@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::agent::Agent;
-use crate::producer::Producer;
 use crate::events;
+use crate::producer::MsgProducer;
 
 #[derive(Clone, Debug)]
 pub struct SimulationConfig {
@@ -48,15 +48,11 @@ impl std::ops::AddAssign for AgentRunnerResult {
 pub struct AgentRunner {
     agents: Vec<Agent>,
     config: SimulationConfig,
-    producer: Arc<dyn Producer>,
+    producer: Arc<dyn MsgProducer>,
 }
 
 impl AgentRunner {
-    pub fn new(
-        num_agents: u64,
-        producer: Arc<dyn Producer>,
-        config: SimulationConfig,
-    ) -> Self {
+    pub fn new(num_agents: u64, producer: Arc<dyn MsgProducer>, config: SimulationConfig) -> Self {
         let agents = (0..num_agents)
             .map(|_| Agent::new(config.clone()))
             .collect();
@@ -78,10 +74,10 @@ impl AgentRunner {
                     let e = agent.end_trip().await;
                     let msg = serde_json::to_vec(&e).expect("Failed to serialize");
 
-                    self.producer
+                    let _ = self.producer
                         .send(self.config.trips_topic.clone(), key, &msg)
                         .await
-                        .expect("Message not sent");
+                        .map_err(map_kafka_send_err);
                 }
             })
             .collect::<Vec<_>>();
@@ -113,10 +109,11 @@ impl AgentRunner {
                         let key = agent.id.to_string();
                         let msg = serde_json::to_vec(&e).expect("Failed to serialize");
 
-                        self.producer
+                        let _ = self.producer
                             .send(topic, key, &msg)
                             .await
-                            .expect("Message not sent");
+                            .map_err(map_kafka_send_err);
+                        // ("Message not sent");
                     } else {
                     }
                 })
@@ -145,4 +142,9 @@ impl AgentRunner {
             total_trips,
         }
     }
+}
+
+fn map_kafka_send_err(err: (rdkafka::error::KafkaError, rdkafka::message::OwnedMessage)) {
+    let kafka_error = err.0;
+    tracing::error!("{:?}", kafka_error);
 }

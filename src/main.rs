@@ -12,7 +12,7 @@ use clap::Parser;
 use std::sync::Arc;
 
 use crate::agent_runner::{AgentRunner, AgentRunnerResult, SimulationConfig};
-use crate::producer::{KafkaProducer, Producer};
+use crate::producer::{KafkaProducer, MsgProducer};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -78,7 +78,7 @@ async fn main() {
         "Connecting to Kafka cluster"
     );
 
-    let producer: Arc<dyn Producer> = Arc::new(KafkaProducer::new(cli.bootstrap_server.clone()));
+    let producer: Arc<dyn MsgProducer> = Arc::new(KafkaProducer::new(cli.bootstrap_server.clone()));
 
     let num_green_threads = if cli.num_agents < cli.num_green_threads {
         1
@@ -131,8 +131,11 @@ async fn main() {
 
     let mut results = AgentRunnerResult::default();
     while let Some(res) = tasks.join_next().await {
-        let run_res = res.unwrap();
-        results += run_res;
+        // let run_res = res.unwrap();
+        match res {
+            Ok(run_res) => results += run_res,
+            Err(err) => tracing::error!("{:?}", err),
+        }
     }
 
     tracing::info!(target: crate::logging::LOG_ALL, pid, results=?results, "simulation complete");
